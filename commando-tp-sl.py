@@ -45,7 +45,6 @@ def draw_heatmap(row_labels, col_labels, data, prob_pallet, title=None, filename
         plt.show()
 
 
-
 # Load commando data
 soup = BeautifulSoup(open(os.getcwd() + "/data/commando.html"), features="lxml")
 t = soup.get_text()
@@ -90,7 +89,7 @@ sl_fired_perc = np.zeros((len(stop_losses), len(take_profits)))
 expected_returns = np.zeros((len(stop_losses), len(take_profits)))
 
 # Iterate over TP/SL configurations
-for k in range(0,len(stop_losses)):
+for k in range(len(stop_losses)):
     for j in range(0,len(take_profits)):
         stop_loss = stop_losses[k]
         tp = take_profits[j]
@@ -207,13 +206,13 @@ for k in range(0,len(stop_losses)):
 row_labels = ["%.0f%%"%(x*100) for x in stop_losses]
 col_labels = ["%.0f%%"%(x*100) for x in take_profits]
 
-for i in range(0,len(row_labels)):
+for i in range(len(row_labels)):
     if row_labels[i] == "-100%": row_labels[i] = "none"
-for i in range(0,len(col_labels)):
+for i in range(len(col_labels)):
     if col_labels[i] == "100%": col_labels[i] = "none"
 data = expected_returns
 
-strings = [["%.1f\n%.1f\n%.2f"%(tp_fired_perc[k,j], sl_fired_perc[k,j], expected_returns[k,j]) for j in range(0,len(take_profits))] for k in range(0,len(stop_losses))]
+strings = [["%.1f\n%.1f\n%.2f"%(tp_fired_perc[k,j], sl_fired_perc[k,j], expected_returns[k,j]) for j in range(len(take_profits))] for k in range(len(stop_losses))]
 strings = np.asarray(strings).reshape(len(stop_losses), len(take_profits))
 
 time_str = "%d hours"%(stat_intervals[heatmap_stats_interval])
