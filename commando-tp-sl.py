@@ -114,15 +114,14 @@ for k in range(len(stop_losses)):
 
                 # Entry signal criteria
                 if commando.values[i] >= entry_on_crossover_of and commando.values[i-1] < entry_on_crossover_of:
-                    num_entry_signals += 1
 
                     # Skip commando entry signals for which ticker data is missing
                     signal_time = commando.times[i]
                     ind = df.loc[df['time'] == signal_time].index
                     if len(ind) == 0:
-                        num_entry_signals -= 1
                         continue
                     signal_ticker_index = ind[0]
+                    num_entry_signals += 1
 
                     entry_close_price = df['close'].iloc[signal_ticker_index]
 
