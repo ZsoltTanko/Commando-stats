@@ -1,84 +1,42 @@
 import os
 import time
-import calendar
-import re
 from collections import defaultdict
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
 import seaborn as sn
-from bs4 import BeautifulSoup
+
+import commando_utils
 
 
-# Stores time and value of commando signals
-class CommandoSymbol:
-    def __init__(self, symbol_name):
-        self.symbol_name = symbol_name
-        self.times = []
-        self.values = []
-        self.num_entries = 0
+# ------------------------------------------------------------------------------------------
+# Backtest config
+# ------------------------------------------------------------------------------------------
 
-    def add_call(self, time, value):
-        self.times.append(time)
-        self.values.append(value)
-        self.num_entries += 1
+base_tf = 15
+symbols = {'AAVEUSDT', 'ADAUSDT', 'AVAXUSDT', 'BALUSDT', 'BNBUSDT', 'DCRUSDT', 'DOGEUSDT',
+           'DOTUSDT', 'EOSUSDT', 'ETHBTC', 'ETHUSDT', 'LINKUSDT', 'RUNEUSDT', 'RLCUSDT',
+           'SOLUSDT', 'SUSHIUSDT', 'SXPUSDT', 'XMRUSDT', 'XRPUSDT', 'UNIUSDT', 'XHVUSDT',
+           'YFIUSDT', 'BTCUSDT', 'LTCUSDT'}
 
-
-# Draw a labeled heatmap with the option to save to file
-def draw_heatmap(row_labels, col_labels, data, prob_pallet, title=None, save=False, display = True):
-    # Create dataframe from row/column labels
-    df = {}
-    for i in range(0, len(col_labels)):
-        df[col_labels[i]] = pd.Series(data[:, i], index=[str(x) for x in row_labels])
-    df = pd.DataFrame(df)
-
-    # Configure, draw, save heatmap
-    sn.set(font_scale=0.8)
-    palette = sn.diverging_palette(h_neg=10, h_pos=230, s=99, l=55, sep=3, as_cmap=True)
-    ax = sn.heatmap(df, cmap=palette, annot=True, center=0.0, cbar=False)
-    ax.figure.set_size_inches(5.5, 2.5)
-    plt.title(title)
-    plt.subplots_adjust(top=0.8)
-    plt.subplots_adjust(left=0.25)
-    plt.subplots_adjust(right=0.975)
-    if save:
-        plt.savefig(os.getcwd() + "/data/" + title + ".png")
-    if display:
-        plt.show()
+stop_loss = -0.05
+tp = 0.2
+score_entry_threshold = 2.5
+btc_score_threshold = 1.5
+commando_avg_threshold = 0.5
+commando_delta_avg_threshold = 0.1
+stat_intervals = [4, 8, 12, 24, 48, 24*3, 24*4, 24*5, 24*6, 24*7]
+plotting_scatterplots = True
 
 
-# Load commando data
-f = open(os.getcwd() + "/data/commando.txt", "r")
-t = f.read()
-f.close()
-t = t.split('\n')
+# ------------------------------------------------------------------------------------------
+# Load data
+# ------------------------------------------------------------------------------------------
 
-# Parse commando signals
-signals = {}
-signals_by_time = defaultdict(list)
-for line in t:
-    if line.startswith('2021'):
-        # Skip signals where commando was updating
-        if 'pending' in line:
-            continue
-
-        # Parse symbol, add to symbol list if needed
-        split = line.split()
-        symbol = split[2]
-        if symbol not in signals.keys():
-            signals[symbol] = CommandoSymbol(symbol)
-
-        # Parse date
-        timestamp = split[0] + ' ' + split[1]
-        timestamp_parsed = calendar.timegm(time.strptime(timestamp, '%Y-%m-%d %H:%M:%S'))
-        score = float(split[5])
-
-        # Parse price delta since last commando update
-        delta = score - float(re.search("T-4=[-]?\d+.\d+", line).group()[4:])
-
-        signals_by_time[timestamp_parsed].append((symbol, score, delta))
-        signals[symbol].add_call(timestamp_parsed, score, delta)
+# Load commando signals and tradingview ticker data
+signals = commando_utils.parse_commando(os.getcwd() + "/data/commando.html")
+dfs = {s:pd.read_csv(os.getcwd() + "/data/BINANCE_" + s + ", " + str(base_tf) + ".csv") for s in symbols}
 
 # Save btc signals separately
 signals_btc = signals.pop('BTCUSDT')
@@ -102,24 +60,10 @@ for time in commando_avg_by_time.keys():
     commando_avg_by_time[time] *= 4
     commando_avg_by_time[time] -= 1
 
-# Load tradingview ticker data for binance symbols
-symbols = {'AAVEUSDT', 'ADAUSDT', 'AVAXUSDT', 'BALUSDT', 'BNBUSDT', 'DCRUSDT', 'DOGEUSDT',
-           'DOTUSDT', 'EOSUSDT', 'ETHBTC', 'ETHUSDT', 'LINKUSDT', 'RUNEUSDT', 'RLCUSDT',
-           'SOLUSDT', 'SUSHIUSDT', 'SXPUSDT', 'XMRUSDT', 'XRPUSDT', 'UNIUSDT', 'XHVUSDT',
-           'YFIUSDT', 'BTCUSDT', 'LTCUSDT'}
-dfs = {s:pd.read_csv(os.getcwd() + "/data//BINANCE_" + s + ", 15.csv") for s in symbols}
 
-
-# Set parameters for backtest: SL and TP values, entry signal threshold, stats intervals (in h)
-stop_loss = -0.05
-tp = 0.2
-score_entry_threshold = 2.5
-btc_score_threshold = 1.5
-commando_avg_threshold = 0.5
-commando_delta_avg_threshold = 0.1
-stat_intervals = [4, 8, 12, 24, 48, 24*3, 24*4, 24*5, 24*6, 24*7]
-plotting_scatterplots = True
-
+# ------------------------------------------------------------------------------------------
+# Collect backtest stats
+# ------------------------------------------------------------------------------------------
 
 # Data to collect
 num_entry_signals = 0
@@ -163,7 +107,7 @@ for symbol, commando in signals.items():
 
             # Find price changes over stats collection intervals after the entry signal
             for interval in stat_intervals:
-                price_interval = df['close'].iloc[signal_ticker_index:signal_ticker_index + int(interval*60/15)]
+                price_interval = df['close'].iloc[signal_ticker_index:signal_ticker_index + int(interval*60/base_tf)]
 
                 price_interval_end_perc_change = price_interval.iloc[-1]/entry_close_price - 1
                 interval_end_perc_change[interval].append(price_interval_end_perc_change)
@@ -212,9 +156,12 @@ for symbol, commando in signals.items():
                 max_perc_drawdown_after_entry[interval].append(max_perc_drawdown)
 
 
+# ------------------------------------------------------------------------------------------
+# Plotting
+# ------------------------------------------------------------------------------------------
+
 # Print stats for every interval
 print("Num entry signals: " + str(num_entry_signals))
-
 for interval in stat_intervals:
     print("%d hours   (tp %.2f, sl %.2f)" % (interval, tp*100, stop_loss*100))
     print("Best gain percent: %.2f ± %.2f" % (np.mean(max_perc_up_after_entry[interval])*100, np.std(max_perc_up_after_entry[interval])*100))
@@ -236,12 +183,7 @@ for interval in stat_intervals:
 if plotting_scatterplots:
     # Set up summary stats data
     row_labels = ["max gain", "max drawdown", "drawdown before peak", "hodl return"]
-    col_labels = []
-    for x in stat_intervals:
-        if x < 24:
-            col_labels.append(str(x)+"h")
-        else:
-            col_labels.append(str(int(x/24))+"d")
+    col_labels = [commando_utils.interval_to_str(x) for x in stat_intervals]
 
     data = np.zeros((len(row_labels), len(col_labels)))
     for i in range(len(stat_intervals)):
@@ -291,15 +233,10 @@ if plotting_scatterplots:
 else:
     # Set up and draw heatmap
     title = "commando cross %.2f entry (average of %d entries)\nbtc score between 0.5 and 2.0" %(entry_on_crossover_of, num_entry_signals)
-    draw_heatmap(row_labels, col_labels, data, prob_pallet=False, title=title, save=False, display=True)
+    commando_utils.draw_heatmap(row_labels, col_labels, data, title=title, save=False, display=True)
 
     row_labels = ["TP fired", "SL fired", "down only"]
-    col_labels = []
-    for x in stat_intervals:
-        if x < 24:
-            col_labels.append(str(x)+"h")
-        else:
-            col_labels.append(str(int(x/24))+"d")
+    col_labels = [commando_utils.interval_to_str(x) for x in stat_intervals]
     data = np.zeros((len(row_labels), len(col_labels)))
 
     for i in range(len(stat_intervals)):
@@ -312,5 +249,4 @@ else:
         data[1, i] = percent_tp
         data[2, i] = (num_times_straight_down[interval]/num_entry_signals)*100
 
-    draw_heatmap(row_labels, col_labels, data, True)
-
+    commando_utils.draw_heatmap(row_labels, col_labels, expected_returns, title=title, save=False, display=True)
