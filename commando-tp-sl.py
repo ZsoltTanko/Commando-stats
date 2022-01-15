@@ -1,89 +1,42 @@
 import os
-import time
-import calendar
 from collections import defaultdict
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sn
-from bs4 import BeautifulSoup
+
+import commando_utils
 
 
-# Stores time and value of commando signals
-class CommandoSymbol:
-    def __init__(self, symbol_name):
-        self.symbol_name = symbol_name
-        self.times = []
-        self.values = []
-        self.num_entries = 0
+# ------------------------------------------------------------------------------------------
+# Backtest config
+# ------------------------------------------------------------------------------------------
 
-    def add_call(self, time, value):
-        self.times.append(time)
-        self.values.append(value)
-        self.num_entries += 1
-
-
-# Draw a labeled heatmap with the option to save to file
-def draw_heatmap(row_labels, col_labels, data, prob_pallet, title=None, filename=None, save=False, display = True, annot=None, xlabel=None, ylabel=None):
-    # Create dataframe from row/column labels
-    df = {}
-    for i in range(0, len(col_labels)):
-        df[col_labels[i]] = pd.Series(data[:, i], index=[str(x) for x in row_labels])
-    df = pd.DataFrame(df)
-
-    # Configure, draw, save heatmap
-    sn.set(font_scale=0.7)
-    palette = sn.diverging_palette(h_neg=10, h_pos=230, s=99, l=55, sep=3, as_cmap=True)
-    ax = sn.heatmap(df, annot=annot, cmap=palette, center=0.00, cbar=False, fmt='')
-    ax.figure.set_size_inches(6, 5.5)
-    plt.title(title)
-    plt.xlabel(xlabel)
-    plt.ylabel(ylabel)
-    if save:
-        plt.savefig(os.getcwd() + "/data/" + filename + ".png")
-    if display:
-        plt.show()
-
-
-# Load commando data
-soup = BeautifulSoup(open(os.getcwd() + "/data/commando.html"), features="lxml")
-t = soup.get_text()
-t = t.split('\n')
-
-# Parse commando signals
-signals = {}
-for line in t:
-    if line.startswith('2021'):
-        # Skip signals where commando was updating
-        if 'pending' in line:
-            continue
-
-        # Parse symbol, add to symbol list if needed
-        split = line.split()
-        symbol = split[2]
-        if symbol not in signals.keys():
-            signals[symbol] = CommandoSymbol(symbol)
-
-        # Parse date and signal value
-        timestamp = split[0] + ' ' + split[1]
-        timestamp_parsed = calendar.timegm(time.strptime(timestamp, '%Y-%m-%d %H:%M:%S'))
-        signals[symbol].add_call(timestamp_parsed, float(split[5]))
-
-
-# Load tradingview ticker data for binance symbols
+base_tf = 15
 symbols = {'AAVEUSDT', 'ADAUSDT', 'AVAXUSDT', 'BNBUSDT', 'BTCUSDT', 'DCRUSDT', 'DOGEUSDT',
            'DOTUSDT', 'EOSUSDT', 'ETHBTC', 'ETHUSDT', 'LINKUSDT', 'LTCUSDT', 'RUNEUSDT',
            'SOLUSDT', 'SUSHIUSDT', 'UNIUSDT', 'XHVUSDT', 'XRPUSDT', 'YFIUSDT'}
-dfs = {s:pd.read_csv(os.getcwd() + "/data//BINANCE_" + s + ", 15.csv") for s in symbols}
 
-
-# Set parameters for backtest: SL and TP values, entry signal threshold, stats intervals (in h)
 stop_losses = [-1.0,-0.2,-0.15,-0.1,-0.07,-0.05,-0.04,-0.03,-0.02]
 take_profits = [0.04,0.05,0.06,0.07,0.1,0.15,0.2,0.3,1.0]
 entry_on_crossover_of = 3.0
-stat_intervals = [4, 8, 12, 24, 48, 24*3, 24*4]
+stat_intervals = [4, 8, 12, 24, 24*2, 24*3, 24*4]
 heatmap_stats_interval = 3
 
+
+# ------------------------------------------------------------------------------------------
+# Load data
+# ------------------------------------------------------------------------------------------
+
+# Load commando signals and tradingview ticker data
+signals = commando_utils.parse_commando(os.getcwd() + "/data/commando.html")
+dfs = {s:pd.read_csv(os.getcwd() + "/data/BINANCE_" + s + ", " + str(base_tf) + ".csv") for s in symbols}
+
+
+# ------------------------------------------------------------------------------------------
+# Collect backtest stats
+# ------------------------------------------------------------------------------------------
+
+# Data to collect
 tp_fired_perc = np.zeros((len(stop_losses), len(take_profits)))
 sl_fired_perc = np.zeros((len(stop_losses), len(take_profits)))
 expected_returns = np.zeros((len(stop_losses), len(take_profits)))
@@ -111,9 +64,8 @@ for k in range(len(stop_losses)):
             df = dfs[symbol]
 
             for i in range(1, commando.num_entries):
-
                 # Entry signal criteria
-                if commando.values[i] >= entry_on_crossover_of and commando.values[i-1] < entry_on_crossover_of:
+                if commando.values[i] >= entry_on_crossover_of and commando.values[i - 1] < entry_on_crossover_of:
 
                     # Skip commando entry signals for which ticker data is missing
                     signal_time = commando.times[i]
@@ -125,9 +77,9 @@ for k in range(len(stop_losses)):
 
                     entry_close_price = df['close'].iloc[signal_ticker_index]
 
-                    # Find price changes over stats collectio intervals after the entry signal
+                    # Find price changes over stats collection intervals after the entry signal
                     for interval in stat_intervals:
-                        price_interval = df['close'].iloc[signal_ticker_index:signal_ticker_index + int(interval*60/15)]
+                        price_interval = df['close'].iloc[signal_ticker_index:signal_ticker_index + int(interval*60/base_tf)]
 
                         price_interval_end_perc_change = price_interval.iloc[-1]/entry_close_price - 1
                         interval_end_perc_change[interval].append(price_interval_end_perc_change)
@@ -201,28 +153,21 @@ for k in range(len(stop_losses)):
             print('\n')
 
 
+# ------------------------------------------------------------------------------------------
+# Plotting
+# ------------------------------------------------------------------------------------------
+
 # Set up and draw heatmap
 row_labels = ["%.0f%%"%(x*100) for x in stop_losses]
 col_labels = ["%.0f%%"%(x*100) for x in take_profits]
 
-for i in range(len(row_labels)):
-    if row_labels[i] == "-100%": row_labels[i] = "none"
-for i in range(len(col_labels)):
-    if col_labels[i] == "100%": col_labels[i] = "none"
-data = expected_returns
+annotations = [["%.1f\n%.1f\n%.2f"%(tp_fired_perc[k,j], sl_fired_perc[k,j], expected_returns[k,j]) for j in range(len(take_profits))] for k in range(len(stop_losses))]
+annotations = np.asarray(strings).reshape(len(stop_losses), len(take_profits))
 
-strings = [["%.1f\n%.1f\n%.2f"%(tp_fired_perc[k,j], sl_fired_perc[k,j], expected_returns[k,j]) for j in range(len(take_profits))] for k in range(len(stop_losses))]
-strings = np.asarray(strings).reshape(len(stop_losses), len(take_profits))
-
-time_str = "%d hours"%(stat_intervals[heatmap_stats_interval])
-if stat_intervals[heatmap_stats_interval] == 24:
-    time_str = "%d day"%int(stat_intervals[heatmap_stats_interval]/24)
-elif stat_intervals[heatmap_stats_interval] > 24:
-    time_str = "%d days"%int(stat_intervals[heatmap_stats_interval]/24)
-
-title = "commando cross %.2f with SL and TP within %s" %(entry_on_crossover_of, time_str)
+title = "commando cross %.2f with SL and TP within %s" %(entry_on_crossover_of, commando_utils.interval_to_str(stat_intervals[heatmap_stats_interval]))
 filename = "commando cross %.2f with SL and TP within %d hours" %(entry_on_crossover_of, stat_intervals[heatmap_stats_interval])
 ylabel = "stop loss"
 xlabel = "take profit"
-draw_heatmap(row_labels, col_labels, data, prob_pallet=True, title=title, filename=filename, save=True, display=True, annot=strings, xlabel=xlabel, ylabel=ylabel)
+
+commando_utils.draw_heatmap(row_labels, col_labels, expected_returns, title=title, filename=filename, save=True, display=True, annot=annotations, xlabel=xlabel, ylabel=ylabel)
 
